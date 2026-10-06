@@ -10,7 +10,7 @@ OpenMCP-testing helps to set up e2e test suites for openmcp applications. Like [
 * [`pkg/conditions`](./pkg/conditions/) provides common pre/post condition checks
 * [`pkg/providers`](./pkg/providers/) provides functionality to test cluster-providers, platform-services and service-providers
 * [`pkg/resources`](./pkg/resources/) provides functionality to (batch) import and delete resources
-* [`pkg/setup`](./pkg/setup/) provides functionality to bootstrap an openmcp environment
+* [`pkg/setup`](./pkg/setup/) provides functionality to bootstrap and verify OpenControlPlane environments
 
 ## Requirements and Setup
 
@@ -19,6 +19,18 @@ You need [go](https://go.dev/) and [docker](https://www.docker.com/) to execute 
 ```shell
 go test -v ./e2e/... -count=1
 ```
+
+## Testing Against Existing Environments
+
+Set your current kubeconfig context to point to the OpenControlPlane [platform cluster](https://open-control-plane.io/developers/clusters-and-namespaces#cluster-overview).
+
+To interact with additional [clusters](https://open-control-plane.io/developers/clusters-and-namespaces#cluster-overview), e.g. to create resources on the onboarding or a control plane cluster, use `clusterutils.ConfigByEnv` instead of the kind-based config utility functions.
+
+Use `OpenMCPSetup.Verify` instead of `OpenMCPSetup.Bootstrap` to verify that an existing environment meets the requested OpenControlPlane setup before executing your test suite.
+
+**Limitations**
+
+To interact with control plane or workload clusters in non-kind-based environments, you need to use the [ClusterAccess Library](https://github.com/openmcp-project/openmcp-operator/blob/main/docs/libraries/clusteraccess.md). `openmcp-testing` provides a utility function to convert a client retrieved through the ClusterAccess library back to an `envconfig.Config`, allowing you to create a typical e2e-framework test suite. Note that `clusterutils.MCPConfig` and `clusterutils.ConfigByPrefix` functionality only work for [cluster-provider-kind](https://github.com/openmcp-project/cluster-provider-kind) based environments (e.g. bootstrapped with [ocpctl](https://github.com/openmcp-project/ocpctl)).
 
 ## Support, Feedback, Contributing
 
