@@ -20,6 +20,8 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/features"
 )
 
+const numberOfTenants = 2
+
 // TestServiceProviderObservability demonstrates how to use the prometheus extension to benchmark a service provider (or domain service)
 func TestServiceProviderObservability(t *testing.T) {
 	observability := features.New("observability").
@@ -34,7 +36,7 @@ func TestServiceProviderObservability(t *testing.T) {
 			if err != nil {
 				t.Fatalf("failed to retrieve onboarding cluster config: %v", err)
 			}
-			if err := resources.CreateNObjectsFromTemplateFile(ctx, onboardingCfg, "onboarding/cp-with-eso.yaml", 3, nil); err != nil {
+			if err := resources.CreateNObjectsFromTemplateFile(ctx, onboardingCfg, "onboarding/cp-with-eso.yaml", numberOfTenants, nil); err != nil {
 				t.Fatalf("applying test data failed: %v", err)
 			}
 			if err := providers.ClustersReady(ctx, c); err != nil {
@@ -43,12 +45,11 @@ func TestServiceProviderObservability(t *testing.T) {
 			return ctx
 		}).
 		Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-			p := prometheus.Prometheus{}
-			if err := p.AddClusters(ctx, c, prometheus.TargetCluster{
+			if err := promExt.AddClusters(ctx, c, prometheus.TargetCluster{
 				Name:  "test-1", // control plane name
 				Label: "test-controlplane",
 			}); err != nil {
-				t.Errorf("add scrape job for test control plane failed: %v", err)
+				t.Fatalf("add scrape job for test control plane failed: %v", err)
 			}
 			return ctx
 		}).
@@ -58,7 +59,7 @@ func TestServiceProviderObservability(t *testing.T) {
 				t.Errorf("failed to retrieve onboarding client: %v", err)
 				return ctx
 			}
-			for i := 0; i < 3; i++ {
+			for i := 0; i < numberOfTenants; i++ {
 				eso := &unstructured.Unstructured{}
 				eso.SetName(fmt.Sprintf("test-%d", i))
 				eso.SetNamespace(corev1.NamespaceDefault)
@@ -99,7 +100,7 @@ func benchmark(container string, controller string, queries []prometheus.NamedQu
 			},
 			JobName: fmt.Sprintf("query-%s", container),
 		}
-		results, err := prometheus.Query(ctx, cfg, queries, params)
+		results, err := promExt.Query(ctx, cfg, queries, params)
 		if err != nil {
 			t.Errorf("promQL query failed: %v", err)
 		}

@@ -20,11 +20,6 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
-const (
-	promtoolJobNamespace = defaultNamespace
-	promtoolEndpoint     = "http://prometheus:9090"
-)
-
 type ObservabilityWindow struct {
 	Start time.Time
 	End   time.Time
@@ -48,9 +43,11 @@ type QueryResult struct {
 	Result model.Matrix
 }
 
+// String returns a single-line summary for simplified reporting. It only shows the first value of the first stream.
+// For more detailed reporting of multi-value query results, access the Result directly.
 func (r QueryResult) String() string {
 	var value string
-	if r.Result.Len() > 0 {
+	if r.Result.Len() > 0 && len(r.Result[0].Values) > 0 {
 		value = r.Result[0].Values[0].Value.String()
 	}
 	return fmt.Sprintf("%s: %s", r.Name, value)
@@ -124,13 +121,16 @@ func (p QueryParameters) validate() error {
 	if p.Window.End.IsZero() {
 		return errors.New("window end must be provided")
 	}
+	if p.Window.End.Before(p.Window.Start) {
+		return errors.New("start must be before end")
+	}
 	return nil
 }
 
 type Option func(c *QueryParameters)
 
 // Query runs all PromQL queries as range queries in a single promtool Job inside the cluster and prints the results.
-func Query(ctx context.Context, cfg *envconf.Config, queries []NamedQuery, params QueryParameters, opts ...Option) ([]QueryResult, error) {
+func (p Prometheus) Query(ctx context.Context, cfg *envconf.Config, queries []NamedQuery, params QueryParameters, opts ...Option) ([]QueryResult, error) {
 	for _, o := range opts {
 		o(&params)
 	}
@@ -142,8 +142,8 @@ func Query(ctx context.Context, cfg *envconf.Config, queries []NamedQuery, param
 		return nil, fmt.Errorf("failed to create clientset: %w", err)
 	}
 	klog.Infof("run query job (%s)", params.JobName)
-	jobsClient := clientset.BatchV1().Jobs(promtoolJobNamespace)
-	job := promtoolJob(defaultVersion, queries, params)
+	jobsClient := clientset.BatchV1().Jobs(p.Namespace)
+	job := p.promtoolJob(queries, params)
 	job.Name = params.JobName
 	if _, err := jobsClient.Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		return nil, fmt.Errorf("failed to create promtool job: %w", err)
@@ -151,15 +151,23 @@ func Query(ctx context.Context, cfg *envconf.Config, queries []NamedQuery, param
 	if err := wait.For(conditions.New(cfg.Client().Resources()).JobCompleted(job)); err != nil {
 		return nil, err
 	}
-	logs, err := jobLogs(ctx, clientset, job.Name)
+	logs, err := p.jobLogs(ctx, clientset, job.Name)
 	if err != nil {
 		return nil, err
 	}
-	return parseLog(logs)
+	result, err := parseLog(logs)
+	if err != nil {
+		return nil, err
+	}
+	foreground := metav1.DeletePropagationForeground
+	if err := jobsClient.Delete(ctx, job.Name, metav1.DeleteOptions{PropagationPolicy: &foreground}); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
-func jobLogs(ctx context.Context, clientset *kubernetes.Clientset, jobName string) (string, error) {
-	pods, err := clientset.CoreV1().Pods(promtoolJobNamespace).List(ctx, metav1.ListOptions{
+func (p Prometheus) jobLogs(ctx context.Context, clientset *kubernetes.Clientset, jobName string) (string, error) {
+	pods, err := clientset.CoreV1().Pods(p.Namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("job-name=%s", jobName),
 	})
 	if err != nil {
@@ -169,7 +177,7 @@ func jobLogs(ctx context.Context, clientset *kubernetes.Clientset, jobName strin
 		return "", fmt.Errorf("no pods found for job %q", jobName)
 	}
 
-	req := clientset.CoreV1().Pods(promtoolJobNamespace).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{})
+	req := clientset.CoreV1().Pods(p.Namespace).GetLogs(pods.Items[0].Name, &corev1.PodLogOptions{})
 	stream, err := req.Stream(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to stream pod logs: %w", err)
@@ -195,6 +203,9 @@ func parseLog(log string) ([]QueryResult, error) {
 	logLines := strings.Split(strings.TrimSpace(log), "\n")
 	var result []QueryResult
 	for i := 0; i < len(logLines); i += 2 {
+		if i+1 >= len(logLines) {
+			return nil, fmt.Errorf("unexpected log format: odd number of lines near %q", logLines[i])
+		}
 		queryName := logLines[i]
 		queryResult, err := parseQueryResult(logLines[i+1])
 		if err != nil {
@@ -209,20 +220,17 @@ func parseLog(log string) ([]QueryResult, error) {
 }
 
 // build job that executes each query
-func promtoolJob(version string, queries []NamedQuery, config QueryParameters) *batchv1.Job {
-	image := defaultImage + ":" + version
+func (p Prometheus) promtoolJob(queries []NamedQuery, config QueryParameters) *batchv1.Job {
 	var sb strings.Builder
 	for _, q := range queries {
 		pql := strings.ReplaceAll(q.Query, "$duration", config.Window.duration())
 		pql = strings.ReplaceAll(pql, "$container", config.Container)
 		pql = strings.ReplaceAll(pql, "$controller", config.Controller)
 		fmt.Fprintf(&sb, "echo '%s'\n", q.Name)
-		fmt.Fprintf(&sb, "promtool query range %s %q -o json --step %s --start %d --end %d\n", promtoolEndpoint, pql, config.Window.duration(), config.Window.Start.Unix(), config.Window.End.Unix())
+		fmt.Fprintf(&sb, "promtool query range %s %q -o json --step %s --start %d --end %d\n", defaultEndpoint, pql, config.Window.duration(), config.Window.Start.Unix(), config.Window.End.Unix())
 	}
 	return &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: promtoolJobNamespace,
-		},
+		Namespace: p.Namespace,
 		Spec: batchv1.JobSpec{
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
@@ -230,7 +238,7 @@ func promtoolJob(version string, queries []NamedQuery, config QueryParameters) *
 					Containers: []corev1.Container{
 						{
 							Name:    "promtool",
-							Image:   image,
+							Image:   p.Image,
 							Command: []string{"/bin/sh", "-c", sb.String()},
 						},
 					},

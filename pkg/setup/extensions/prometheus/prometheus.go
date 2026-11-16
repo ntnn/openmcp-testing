@@ -9,7 +9,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,8 +32,9 @@ import (
 
 const (
 	defaultNamespace = "monitoring"
-	defaultVersion   = "v3.4.1"
-	defaultImage     = "prom/prometheus"
+	defaultImage     = "prom/prometheus:v3.4.1"
+	defaultEndpoint  = "http://prometheus:9090"
+	defaultSuffix    = "openmcp-testing"
 )
 
 //go:embed config/*
@@ -71,8 +72,10 @@ type Prometheus struct {
 	// Namespace is the Kubernetes namespace where Prometheus will be installed.
 	// If empty, defaults to "monitoring".
 	Namespace string
-	// If empty, defaults to "openmcp-testing" to prevent conflicts with existing resources when testing agains real environments
+	// If empty, defaults to "openmcp-testing" to prevent conflicts with existing resources when testing against real environments
 	ClusterResourceSuffix string
+	// If empty, defaults to "prom/prometheus:v3.4.1". Used to deploy prometheus and create promtool jobs.
+	Image string
 }
 
 func (p *Prometheus) applyDefaults() {
@@ -80,7 +83,10 @@ func (p *Prometheus) applyDefaults() {
 		p.Namespace = defaultNamespace
 	}
 	if p.ClusterResourceSuffix == "" {
-		p.ClusterResourceSuffix = "openmcp-testing"
+		p.ClusterResourceSuffix = defaultSuffix
+	}
+	if p.Image == "" {
+		p.Image = defaultImage
 	}
 }
 
@@ -99,7 +105,6 @@ func (p *Prometheus) Uninstall(ctx context.Context, cfg *envconf.Config) error {
 		return err
 	}
 	// cleanup rbac
-	rbacv1.AddToScheme(cfg.Client().Resources().GetScheme())
 	name := "prometheus-" + p.ClusterResourceSuffix
 	if err := deleteIfTestingResource(ctx, &rbacv1.ClusterRoleBinding{Name: name}, cfg); err != nil {
 		return err
@@ -110,7 +115,7 @@ func (p *Prometheus) Uninstall(ctx context.Context, cfg *envconf.Config) error {
 func deleteIfTestingResource(ctx context.Context, role k8s.Object, cfg *envconf.Config) error {
 	if err := cfg.Client().Resources().Get(ctx, role.GetName(), "", role); err == nil {
 		if _, ok := role.GetLabels()[resources.CreatedByKey]; ok {
-			if err := cfg.Client().Resources().Delete(ctx, role); err != nil && !errors.IsNotFound(err) {
+			if err := cfg.Client().Resources().Delete(ctx, role); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}
 		}
@@ -144,13 +149,16 @@ func (p *Prometheus) Install(ctx context.Context, cfg *envconf.Config) error {
 }
 
 // RegisterSchemes implements [extensions.Extension].
-func (p *Prometheus) RegisterSchemes(_ context.Context, _ *runtime.Scheme) error {
+func (p *Prometheus) RegisterSchemes(_ context.Context, scheme *runtime.Scheme) error {
+	if err := rbacv1.AddToScheme(scheme); err != nil {
+		return fmt.Errorf("failed to register rbac scheme: %w", err)
+	}
 	return nil
 }
 
 func createIfNotExists(ctx context.Context, cfg *envconf.Config, obj k8s.Object) error {
 	if err := cfg.Client().Resources().Create(ctx, obj); err != nil {
-		if !strings.Contains(err.Error(), "already exists") {
+		if !apierrors.IsAlreadyExists(err) {
 			return fmt.Errorf("failed to create %T %s: %w", obj, obj.GetName(), err)
 		}
 	}
@@ -229,7 +237,6 @@ func (p *Prometheus) rbacIfNotExists(ctx context.Context, c *envconf.Config) err
 	// Check if a ClusterRole with this name already exists would risk tampering with roles on real environments.
 	name := "prometheus-" + p.ClusterResourceSuffix
 	role := &rbacv1.ClusterRole{}
-	rbacv1.AddToScheme(c.Client().Resources().GetScheme())
 	if err := c.Client().Resources().Get(ctx, name, "", role); err == nil {
 		return fmt.Errorf("ClusterRole %q already exists; set a unique ClusterResourceSuffix to avoid conflicts with existing roles", name)
 	}
@@ -273,7 +280,7 @@ func (p *Prometheus) deployment(ctx context.Context, c *envconf.Config, remoteCl
 		Image          string
 		RemoteClusters []remoteCluster
 	}{
-		Image:          defaultImage + ":" + defaultVersion,
+		Image:          p.Image,
 		RemoteClusters: remoteClusters,
 	}
 	if len(remoteClusters) > 0 {
@@ -286,7 +293,7 @@ func (p *Prometheus) deployment(ctx context.Context, c *envconf.Config, remoteCl
 		}
 	}
 	klog.Info("waiting for prometheus to be ready")
-	if err := wait.For(conditions.New(c.Client().Resources()).DeploymentAvailable("prometheus", promtoolJobNamespace)); err != nil {
+	if err := wait.For(conditions.New(c.Client().Resources()).DeploymentAvailable("prometheus", p.Namespace)); err != nil {
 		return fmt.Errorf("prometheus deployment not available: %w", err)
 	}
 	return nil
@@ -312,6 +319,7 @@ spec:
 
 // AddClusters adds a scrape job to the prometheus config for each given TargetCluster.
 // For each cluster it creates an AccessRequest in the Prometheus namespace and updates the ConfigMap and Prometheus deployment to mount every remote kubeconfig.
+// Note that this operation is only available when using a dedicated test prometheus (p.Endpoint = "") to prevent tampering the configuration of a non-testing prometheus deployment.
 func (p *Prometheus) AddClusters(ctx context.Context, cfg *envconf.Config, targetClusters ...TargetCluster) error {
 	p.applyDefaults()
 	var additionalClusters []remoteCluster
@@ -351,7 +359,10 @@ func (p *Prometheus) AddClusters(ctx context.Context, cfg *envconf.Config, targe
 		}
 
 		// 3. create a new secret based on the access request kubeconfig that can be used scrape the given cluster
-		secretName, _, _ := unstructured.NestedString(arObj.Object, "status", "secretRef", "name")
+		secretName, _, err := unstructured.NestedString(arObj.Object, "status", "secretRef", "name")
+		if err != nil {
+			return fmt.Errorf("failed to retrieve kubeconfig secret based on access request (%q): %w", arObj.GetName(), err)
+		}
 		promSecretName := secretName + ".prom"
 		apiServer, err := createPrometheusJobSecret(ctx, cfg, types.NamespacedName{Name: secretName, Namespace: p.Namespace}, types.NamespacedName{Name: promSecretName, Namespace: p.Namespace})
 		if err != nil {

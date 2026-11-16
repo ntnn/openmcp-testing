@@ -18,9 +18,11 @@ import (
 )
 
 var testenv env.Environment
+var promExt prometheus.Prometheus
 
 func TestMain(m *testing.M) {
 	initLogging()
+	promExt = prometheus.Prometheus{}
 	openmcp := setup.OpenMCPSetup{
 		Namespace: "openmcp-system",
 		Operator: setup.OpenMCPOperatorSetup{
@@ -57,7 +59,7 @@ func TestMain(m *testing.M) {
 		},
 		Extensions: []extensions.Extension{
 			&fluxcd.FluxCD{},
-			&prometheus.Prometheus{},
+			&promExt,
 		},
 	}
 	testenv = env.NewWithConfig(envconf.New().WithNamespace(openmcp.Namespace))

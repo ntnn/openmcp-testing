@@ -102,3 +102,5 @@ os.Exit(testenv.Run(m))
 ```
 
 It is recommended to verify that an environment meets an expected configuration by using `openMCPSetup.Verify`.
+
+Note that using an existing prometheus deployment is currently not supported to avoid depending on config assumptions that can't be adjusted.

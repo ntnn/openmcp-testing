@@ -60,6 +60,6 @@ type Extension interface {
 
 	// Uninstall deletes the extension from the Kubernetes cluster.
 	// This method is called during the test teardown.
-	// Returns an error if the installation fails.
+	// Returns an error if the uninstallation fails.
 	Uninstall(context.Context, *envconf.Config) error
 }

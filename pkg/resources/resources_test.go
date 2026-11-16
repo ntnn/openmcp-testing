@@ -102,7 +102,7 @@ func TestCreateNObjectsFromTemplateFile(t *testing.T) {
 			logs := captureLogs(t)
 			cfg := envconf.New().WithNamespace("test-ns")
 			data := templateData{Name: "test", Namespace: "default"}
-			gotErr := resources.CreateNObjectsFromTemplateFile(t.Context(), cfg, tt.filePath, tt.count, data)
+			gotErr := resources.CreateNObjectsFromTemplateFile(t.Context(), cfg, tt.filePath, tt.count, data, decoder.MutateNamespace(data.Namespace))
 			if gotErr != nil {
 				if !tt.wantErr {
 					t.Errorf("CreateNObjectsFromTemplateFile() failed: %v", gotErr)
