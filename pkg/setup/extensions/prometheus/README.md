@@ -1,18 +1,8 @@
 # Prometheus Extension
 
-The prometheus extension can be used to deploy prometheus to collect and query metrics data for perfomance testing.
+The prometheus extension can be used to perfomance test [service providers](#service-provider-testing-example) and [domain services](#domain-service-testing-example) in context of OpenControlPlane. It deploys a dedicated test prometheus instance and enables performance testing based on regular [PromQL](https://prometheus.io/docs/prometheus/latest/querying/basics/) queries.
 
-The following use cases are supported:
-
-Technical:
-- Local test execution with cluster-provider-kind based on `setup.Bootstrap`.
-- Remote test execution on existing infrastructure based on `setup.Validate`.
-
-Functional:
-- Monitoring Service Providers (default) by scraping the platform cluster.
-- Monitoring Domain Services by additionally scraping for workload or control plane cluster (`prometheus.AddCluster`).
-
-Note that adding additional clusters restarts prometheus which results in losing all previously scraped data. This is only a concern if you mix evaluation of service provider performance with domain service performance as part of the same test which is currently not recommended.
+Tests can be executed by bootstrapping an OpenControlPlane environment or [against an existing environment](#testing-against-existing-environments).
 
 ## Metrics Overview
 
@@ -21,11 +11,13 @@ The prometheus extension is configured to collect the following metrics per targ
 - metrics provided by an application like [controller-runtime metrics](https://book.kubebuilder.io/reference/metrics-reference.html) and [prometheus go client collector metrics](https://github.com/prometheus/client_golang)
 - metrics provided by the [kubelet](https://kubernetes.io/docs/reference/instrumentation/metrics/) (/metrics/resource)
 
-## Query Options
+## Query Parameters Mapping
 
-- the required window query parameter defines the start, end and step settings of the executed [range query](https://prometheus.io/docs/prometheus/latest/querying/api/#range-queries).
-- the required job name identifies the job resource to parse and return the query result
-- Container and controller parameters are used to select the controllers under test (requirement depends on the set of promql queries passed to `prometheus.Query`)
+Each `prometheus.Query` call results in Kubernetes job that executes promtool [range queries](https://prometheus.io/docs/prometheus/latest/querying/api/#range-queries). The following parameters exit:
+
+- (required) Window defines the start, end and step settings of the range query. The derived duration can also be used as placeholder in PromQL queries (see set of predefined queries as a reference).
+- (required) Job name identifies the job resource to parse and return the query result. Since the prometheus extension uses an exlusive namespace, any name can be chosen as long as it unique across `prometheus.Query` calls within the current test context.
+- (optional) Container and controller parameters can be used as placeholders in PromQL queries. Note that some of the predefined queries only work if those values are provided.
 
 ## Service Provider Testing Example
 
@@ -74,11 +66,13 @@ Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context
 }).
 ```
 
+Note that adding additional clusters restarts prometheus which results in losing all previously scraped data. This is only a concern if you mix evaluation of service provider performance with domain service performance as part of the same test which is currently not recommended.
+
 3. Add a `prometheus.Query` in your test suite (same as before).
 
 ## Reference Usage
 
-Both scenarios are covered in [e2e test](../../../../e2e/observability_test.go)
+Both scenarios are covered by the simplified [observability e2e test](../../../../e2e/observability_test.go) example.
 
 ## Testing Against Existing Environments
 
@@ -100,6 +94,8 @@ testenv.Setup(func(ctx context.Context, c *envconf.Config) (context.Context, err
 })
 os.Exit(testenv.Run(m))
 ```
+
+The current kubeconfig context has to point to the platform cluster. To interact with additional [clusters](https://open-control-plane.io/developers/clusters-and-namespaces#cluster-overview), e.g. to create resources on the onboarding or a control plane cluster, use `clusterutils.ConfigByEnv` instead of the kind-based config utility functions.
 
 It is recommended to verify that an environment meets an expected configuration by using `openMCPSetup.Verify`.
 

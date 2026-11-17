@@ -31,7 +31,7 @@ import (
 )
 
 const (
-	defaultNamespace = "monitoring"
+	defaultNamespace = "prometheus-openmcp-testing"
 	defaultImage     = "prom/prometheus:v3.4.1"
 	defaultEndpoint  = "http://prometheus:9090"
 	defaultSuffix    = "openmcp-testing"
@@ -61,6 +61,7 @@ type remoteCluster struct {
 	APIServer string
 }
 
+// TargetCluster identifies additional scrape targets by cluster (request).
 type TargetCluster struct {
 	// Name is the name of the cluster (request), e.g. a controlplane with name test-mcp will result in a cluster-request (in a tenant namespace) with the same name
 	Name string
@@ -68,13 +69,14 @@ type TargetCluster struct {
 	Label string
 }
 
+// Prometheus defines global extension settings which are defaulted if not provided.
 type Prometheus struct {
-	// Namespace is the Kubernetes namespace where Prometheus will be installed.
-	// If empty, defaults to "monitoring".
+	// Namespace is the Kubernetes namespace where the Prometheus deployment and query jobs will be created.
 	Namespace string
-	// If empty, defaults to "openmcp-testing" to prevent conflicts with existing resources when testing against real environments
+	// ClusterResourceSuffix is applied when creating cluster scoped resource names to prevent conflicts with existing resources.
+	// E.g. when testing testing against real environments.
 	ClusterResourceSuffix string
-	// If empty, defaults to "prom/prometheus:v3.4.1". Used to deploy prometheus and create promtool jobs.
+	// Image defines the version that is used to deploy prometheus and create promtool jobs.
 	Image string
 }
 
@@ -90,18 +92,16 @@ func (p *Prometheus) applyDefaults() {
 	}
 }
 
-// Uninstall implements [extensions.Extension].
+// Uninstall deletes the test namespace and cluster wide RBAC definitions created during Install.
+// As an additional safety layer, each deletion includes a testing label check and skips deletion of resources that don't carry the expected created-by key value pair.
 func (p *Prometheus) Uninstall(ctx context.Context, cfg *envconf.Config) error {
 	klog.Info("uninstalling prometheus...")
 	p.applyDefaults()
 	if err := p.cleanupAccess(ctx, cfg); err != nil {
 		return err
 	}
-	obj := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: p.Namespace}}
-	if err := cfg.Client().Resources().Delete(ctx, obj); err != nil {
-		return err
-	}
-	if err := wait.For(conditions.New(cfg.Client().Resources()).ResourceDeleted(obj)); err != nil {
+	obj := &corev1.Namespace{Name: p.Namespace}
+	if err := deleteIfTestingResource(ctx, obj, cfg); err != nil {
 		return err
 	}
 	// cleanup rbac
@@ -112,12 +112,18 @@ func (p *Prometheus) Uninstall(ctx context.Context, cfg *envconf.Config) error {
 	return deleteIfTestingResource(ctx, &rbacv1.ClusterRole{Name: name}, cfg)
 }
 
-func deleteIfTestingResource(ctx context.Context, role k8s.Object, cfg *envconf.Config) error {
-	if err := cfg.Client().Resources().Get(ctx, role.GetName(), "", role); err == nil {
-		if _, ok := role.GetLabels()[resources.CreatedByKey]; ok {
-			if err := cfg.Client().Resources().Delete(ctx, role); err != nil && !apierrors.IsNotFound(err) {
+func deleteIfTestingResource(ctx context.Context, obj k8s.Object, cfg *envconf.Config) error {
+	if err := cfg.Client().Resources().Get(ctx, obj.GetName(), "", obj); err == nil {
+		if value, ok := obj.GetLabels()[resources.CreatedByKey]; ok && value == resources.CreatedByValue {
+			klog.Infof("delete %T %q", obj, obj.GetName())
+			if err := cfg.Client().Resources().Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 				return err
 			}
+			if err := wait.For(conditions.New(cfg.Client().Resources()).ResourceDeleted(obj)); err != nil {
+				return err
+			}
+		} else {
+			klog.Infof("skipped deletion of %T %q due to missing or unexpected %q annotation value", obj, obj.GetName(), resources.CreatedByKey)
 		}
 	}
 	return nil
@@ -128,7 +134,9 @@ func (p *Prometheus) Name() string {
 	return "prometheus"
 }
 
-// Install implements [extensions.Extension].
+// Install installs prometheus with a predefined OpenControlPlane scrape config in the target namespace.
+// If the requested namespace or any cluster wide RBAC definitions conflict with existing resources,
+// the installation fails to prevent tampering resources on real environments.
 func (p *Prometheus) Install(ctx context.Context, cfg *envconf.Config) error {
 	klog.Info("installing prometheus...")
 	p.applyDefaults()
@@ -157,10 +165,14 @@ func (p *Prometheus) RegisterSchemes(_ context.Context, scheme *runtime.Scheme) 
 }
 
 func createIfNotExists(ctx context.Context, cfg *envconf.Config, obj k8s.Object) error {
+	labels := obj.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels[resources.CreatedByKey] = resources.CreatedByValue
+	obj.SetLabels(labels)
 	if err := cfg.Client().Resources().Create(ctx, obj); err != nil {
-		if !apierrors.IsAlreadyExists(err) {
-			return fmt.Errorf("failed to create %T %s: %w", obj, obj.GetName(), err)
-		}
+		return fmt.Errorf("failed to create %T %s: %w", obj, obj.GetName(), err)
 	}
 	return nil
 }
@@ -238,11 +250,11 @@ func (p *Prometheus) rbacIfNotExists(ctx context.Context, c *envconf.Config) err
 	name := "prometheus-" + p.ClusterResourceSuffix
 	role := &rbacv1.ClusterRole{}
 	if err := c.Client().Resources().Get(ctx, name, "", role); err == nil {
-		return fmt.Errorf("ClusterRole %q already exists; set a unique ClusterResourceSuffix to avoid conflicts with existing roles", name)
+		return fmt.Errorf("ClusterRole %q already exists; choose a unique suffix to avoid conflicts with existing roles", name)
 	}
 	binding := &rbacv1.ClusterRoleBinding{}
 	if err := c.Client().Resources().Get(ctx, name, "", binding); err == nil {
-		return fmt.Errorf("ClusterRoleBinding %q already exists; set a unique ClusterResourceSuffix to avoid conflicts with existing bindings", name)
+		return fmt.Errorf("ClusterRoleBinding %q already exists; set a unique suffix to avoid conflicts with existing bindings", name)
 	}
 	if _, err := resources.CreateObjectsFromTemplateFile(ctx, newConfigWithNamespace(c, p.Namespace), rbacTemplate, templateData); err != nil {
 		return fmt.Errorf("failed to create prometheus rbac: %w", err)
@@ -319,7 +331,7 @@ spec:
 
 // AddClusters adds a scrape job to the prometheus config for each given TargetCluster.
 // For each cluster it creates an AccessRequest in the Prometheus namespace and updates the ConfigMap and Prometheus deployment to mount every remote kubeconfig.
-// Note that this operation is only available when using a dedicated test prometheus (p.Endpoint = "") to prevent tampering the configuration of a non-testing prometheus deployment.
+// Note that adding additional clusters restarts prometheus which results in losing all previously scraped data.
 func (p *Prometheus) AddClusters(ctx context.Context, cfg *envconf.Config, targetClusters ...TargetCluster) error {
 	p.applyDefaults()
 	var additionalClusters []remoteCluster

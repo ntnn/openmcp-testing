@@ -20,9 +20,12 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
 )
 
+// ObservabilityWindow defines the query range parameters start, end, step and optionally PromQL rate durations.
 type ObservabilityWindow struct {
+	// Start parameter passed to the promtool query range execution
 	Start time.Time
-	End   time.Time
+	// End parameter passed to the promtool query range execution
+	End time.Time
 }
 
 // duration returns the window size as a Prometheus duration string (e.g. "900s").
@@ -33,13 +36,19 @@ func (w ObservabilityWindow) duration() string {
 // NamedQuery is a PromQL query with a display name and description.
 // The Query string may contain the placeholders $duration and $container which are replaced with values derived from the ObservabilityWindow passed to Query.
 type NamedQuery struct {
-	Name        string
+	// Name is used to identify a query.
+	Name string
+	// Description can be used in result reporting and generally describes the purpose of a query.
 	Description string
-	Query       string
+	// Query is the PromQL query string.
+	Query string
 }
 
+// QueryResult returnts the query name with its result.
 type QueryResult struct {
-	Name   string
+	// Name from the NamedQuery to map a result back to a query.
+	Name string
+	// Result of the promtool range query execution.
 	Result model.Matrix
 }
 
@@ -100,14 +109,15 @@ var AllQueries = []NamedQuery{
 	MaxWorkqueueDepth,
 }
 
+// QueryParameters define promtool query range execution and optionally PromQL placeholders.
 type QueryParameters struct {
-	// Container selector for kubelet metrics
+	// Container selector for kubelet metrics.
 	Container string
-	// Controller selector for controller runtime metrics
+	// Controller selector for controller runtime metrics.
 	Controller string
-	// JobName to identify the query job resource
+	// JobName to identify the query job resource. Has to be unique across Query calls within the current test context.
 	JobName string
-	// Window to execute query range and compute duration value for step and rate duration
+	// Window to execute query range and compute duration value for step and rate durations.
 	Window ObservabilityWindow
 }
 
