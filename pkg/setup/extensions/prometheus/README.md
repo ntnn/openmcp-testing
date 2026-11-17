@@ -19,60 +19,20 @@ Each `prometheus.Query` call results in Kubernetes job that executes promtool [r
 - (required) Job name identifies the job resource to parse and return the query result. Since the prometheus extension uses an exlusive namespace, any name can be chosen as long as it unique across `prometheus.Query` calls within the current test context.
 - (optional) Container and controller parameters can be used as placeholders in PromQL queries. Note that some of the predefined queries only work if those values are provided.
 
-## Service Provider Testing Example
+## Service Provider Testing Flow
 
-1. Add the prometheus extension to your OpenMCPSetup:
+1. Add the `prometheus.Prometheus` to `OpenMCPSetup.Extensions`.
+2. Use `prometheus.Query` to generate test results and reports.
 
-```go
-setup.OpenMCPOperatorSetup{
-	Name:         "openmcp-operator",
-	Image:        "ghcr.io/openmcp-project/images/openmcp-operator:v1.3.0",
-	Extensions: []extensions.Extension{
-		&prometheus.Prometheus{},
-	},
-}
-```
+## Domain Service Testing Flow
 
-2. Add a `prometheus.Query` in your test suite (note that in a real test you want to provide a time window that actually represents the start and end time where you e.g. created load on the controller under test):
-
-```go
-params := prometheus.QueryParameters{
-	Container:  container,
-	Controller: controller,
-	Window: prometheus.ObservabilityWindow{
-		Start: time.Now().Add(-15 * time.Minute),
-		End:   time.Now(),
-	},
-	JobName: fmt.Sprintf("query-%s", container),
-}
-results, err := prometheus.Query(ctx, cfg, queries, params)
-```
-
-## Domain Service Testing Example
-
-1. Add the prometheus extension to your OpenMCPSetup (same as before).
-2. Add additional clusters to monitor with `prometheus.AddClusters` to scrape control planes and workload clusters that have been provisioned by your test suite:
-
-```go
-Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
-	p := prometheus.Prometheus{}
-	if err := p.AddClusters(ctx, c, prometheus.TargetCluster{
-		Name:  "test", // control plane name
-		Label: "test-controlplane",
-	}); err != nil {
-		t.Errorf("add scrape job for test control plane failed: %v", err)
-	}
-	return ctx
-}).
-```
-
-Note that adding additional clusters restarts prometheus which results in losing all previously scraped data. This is only a concern if you mix evaluation of service provider performance with domain service performance as part of the same test which is currently not recommended.
-
-3. Add a `prometheus.Query` in your test suite (same as before).
+1. Add the `prometheus.Prometheus` to `OpenMCPSetup.Extensions`.
+2. Add the control plane or workload cluster that runs your domain service as an additional scrape target with `prometheus.AddClusters`. A cluster has to be ready when you call this function. Note that adding clusters restarts prometheus which results in losing all previously scraped data. This is only a concern if you mix service provider testing with domain service testing as part of the same test suite which is not recommended.
+3. Use `prometheus.Query` to generate test results and reports.
 
 ## Reference Usage
 
-Both scenarios are covered by the simplified [observability e2e test](../../../../e2e/observability_test.go) example.
+The [observability e2e test](../../../../e2e/observability_test.go) verifies that the Prometheus extension (un)installs and runs without errors but does not assert the correctness of the metrics or data it produces. Real-world tests should set an appropriate query window and reasonable waiting times.
 
 ## Testing Against Existing Environments
 
@@ -82,15 +42,9 @@ Use the extension directly instead of bootstrapping an OpenControlPlane envirome
 promExt := prometheus.Prometheus{}
 testenv = env.NewWithConfig(envconf.New().WithNamespace(openmcp.Namespace))
 testenv.Setup(func(ctx context.Context, c *envconf.Config) (context.Context, error) {
-	if err := promExt.Install(ctx, c); err != nil {
-		return nil, err
-	}
-	return ctx, nil
+	return promExt.Install(ctx, c)
 }).Finish(func(ctx context.Context, c *envconf.Config) (context.Context, error) {
-	if err := promExt.Uninstall(ctx, c); err != nil {
-		return nil, err
-	}
-	return ctx, nil
+	return promExt.Uninstall(ctx, c)
 })
 os.Exit(testenv.Run(m))
 ```

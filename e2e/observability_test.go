@@ -8,12 +8,12 @@ import (
 
 	"github.com/openmcp-project/openmcp-testing/pkg/clusterutils"
 	"github.com/openmcp-project/openmcp-testing/pkg/conditions"
-	"github.com/openmcp-project/openmcp-testing/pkg/providers"
 	"github.com/openmcp-project/openmcp-testing/pkg/resources"
 	"github.com/openmcp-project/openmcp-testing/pkg/setup/extensions/prometheus"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/e2e-framework/klient/wait"
 	"sigs.k8s.io/e2e-framework/pkg/envconf"
@@ -39,15 +39,25 @@ func TestServiceProviderObservability(t *testing.T) {
 			if err := resources.CreateNObjectsFromTemplateFile(ctx, onboardingCfg, "onboarding/cp-with-eso.yaml", numberOfTenants, nil); err != nil {
 				t.Fatalf("applying test data failed: %v", err)
 			}
-			if err := providers.ClustersReady(ctx, c); err != nil {
-				t.Fatalf("clusters failed to get ready: %v", err)
+			for i := 0; i < numberOfTenants; i++ {
+				controlPlane := &unstructured.Unstructured{}
+				controlPlane.SetName(fmt.Sprintf("test-%d", i))
+				controlPlane.SetNamespace(corev1.NamespaceDefault)
+				controlPlane.SetGroupVersionKind(schema.GroupVersionKind{
+					Group:   "core.open-control-plane.io",
+					Version: "v2alpha1",
+					Kind:    "ControlPlane",
+				})
+				if err := wait.For(conditions.Status(controlPlane, onboardingCfg, "phase", "Ready")); err != nil {
+					t.Errorf("ControlPlane failed to get ready: %v", err)
+				}
 			}
 			return ctx
 		}).
 		Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			if err := promExt.AddClusters(ctx, c, prometheus.TargetCluster{
-				Name:  "test-1", // control plane name
-				Label: "test-controlplane",
+				ControlPlane: types.NamespacedName{Name: "test-1", Namespace: corev1.NamespaceDefault},
+				Label:        "test-controlplane",
 			}); err != nil {
 				t.Fatalf("add scrape job for test control plane failed: %v", err)
 			}
@@ -72,9 +82,9 @@ func TestServiceProviderObservability(t *testing.T) {
 					t.Errorf("eso not ready: %v", err)
 				}
 			}
-			klog.Info("waiting one scrape interval")
+			klog.Info("waiting two scrape intervals")
 			select {
-			case <-time.After(time.Second * 30):
+			case <-time.After(time.Second * 60):
 			case <-ctx.Done():
 			}
 			return ctx
