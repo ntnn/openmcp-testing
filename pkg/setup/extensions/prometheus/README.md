@@ -1,22 +1,22 @@
 # Prometheus Extension
 
-The prometheus extension can be used to perfomance test [service providers](#service-provider-testing-example) and [domain services](#domain-service-testing-example) in context of OpenControlPlane. It deploys a dedicated test prometheus instance and enables performance testing based on regular [PromQL](https://prometheus.io/docs/prometheus/latest/querying/basics/) queries.
+The Prometheus extension deploys a dedicated test Prometheus instance and enables performance testing via [PromQL](https://prometheus.io/docs/prometheus/latest/querying/basics/) queries. It can be used to test [service providers](#service-provider-testing-example) and [domain services](#domain-service-testing-example) in the context of OpenControlPlane.
 
 Tests can be executed by bootstrapping an OpenControlPlane environment or [against an existing environment](#testing-against-existing-environments).
 
 ## Metrics Overview
 
-The prometheus extension is configured to collect the following metrics per target cluster (platform and optional remote clusters):
+The Prometheus extension is configured to collect the following metrics per target cluster (platform and optional remote clusters):
 
 - metrics provided by an application like [controller-runtime metrics](https://book.kubebuilder.io/reference/metrics-reference.html) and [prometheus go client collector metrics](https://github.com/prometheus/client_golang)
 - metrics provided by the [kubelet](https://kubernetes.io/docs/reference/instrumentation/metrics/) (/metrics/resource)
 
 ## Query Parameters Mapping
 
-Each `prometheus.Query` call results in Kubernetes job that executes promtool [range queries](https://prometheus.io/docs/prometheus/latest/querying/api/#range-queries). The following parameters exit:
+Each `prometheus.Query` call results in a Kubernetes job that executes promtool [range queries](https://prometheus.io/docs/prometheus/latest/querying/api/#range-queries). The following parameters exist:
 
 - (required) Window defines the start, end and step settings of the range query. The derived duration can also be used as placeholder in PromQL queries (see set of predefined queries as a reference).
-- (required) Job name identifies the job resource to parse and return the query result. Since the prometheus extension uses an exlusive namespace, any name can be chosen as long as it unique across `prometheus.Query` calls within the current test context.
+- (required) Job name identifies the job resource to parse and return the query result. Since the Prometheus extension uses an exclusive namespace, any name can be chosen as long as it is unique across `prometheus.Query` calls within the current test context.
 - (optional) Container and controller parameters can be used as placeholders in PromQL queries. Note that some of the predefined queries only work if those values are provided.
 
 ## Service Provider Testing Flow
@@ -27,7 +27,7 @@ Each `prometheus.Query` call results in Kubernetes job that executes promtool [r
 ## Domain Service Testing Flow
 
 1. Add the `prometheus.Prometheus` to `OpenMCPSetup.Extensions`.
-2. Add the control plane or workload cluster that runs your domain service as an additional scrape target with `prometheus.AddClusters`. A cluster has to be ready when you call this function. Note that adding clusters restarts prometheus which results in losing all previously scraped data. This is only a concern if you mix service provider testing with domain service testing as part of the same test suite which is not recommended.
+2. Add the control plane or workload cluster that runs your domain service as an additional scrape target with `prometheus.AddClusters`. A cluster has to be ready when you call this function. Note that adding clusters restarts Prometheus, which causes all previously scraped data to be lost. This is only a concern if you mix service provider and domain service testing in the same test suite, which is not recommended.
 3. Use `prometheus.Query` to generate test results and reports.
 
 ## Reference Usage
@@ -36,7 +36,7 @@ The [observability e2e test](../../../../e2e/observability_test.go) verifies tha
 
 ## Testing Against Existing Environments
 
-Use the extension directly instead of bootstrapping an OpenControlPlane enviroment.
+Use the extension directly instead of bootstrapping an OpenControlPlane environment.
 
 ```go
 promExt := prometheus.Prometheus{}
@@ -51,6 +51,10 @@ os.Exit(testenv.Run(m))
 
 The current kubeconfig context has to point to the platform cluster. To interact with additional [clusters](https://open-control-plane.io/developers/clusters-and-namespaces#cluster-overview), e.g. to create resources on the onboarding or a control plane cluster, use `clusterutils.ConfigByEnv` instead of the kind-based config utility functions.
 
-It is recommended to verify that an environment meets an expected configuration by using `openMCPSetup.Verify`.
+It is recommended to verify that an environment meets an expected configuration by using `OpenMCPSetup.Verify`.
 
-Note that using an existing prometheus deployment is currently not supported to avoid depending on config assumptions that can't be adjusted.
+Note that reusing an existing Prometheus deployment is not supported, as it relies on configuration assumptions that the extension cannot control.
+
+## Load Generation
+
+The `resources` package provides a very simple way to generate load with `CreateNObjectsFromTemplateFile` based on text templating and `klient.decoder` of [e2e-framework](https://github.com/kubernetes-sigs/e2e-framework/). Use this function to generate arbitrary resources for both service provider and domain services.

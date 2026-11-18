@@ -78,12 +78,12 @@ var (
 	// kubernetes (kubelet) metrics based queries
 	ContainerAverageCPUUsage = NamedQuery{
 		Name:        "average container cpu usage (cores)",
-		Description: "Average CPU consumption of the container expressed in fractional cores. Use to right-size CPU requests and limits.",
+		Description: "Average CPU usage rate of the container expressed in fractional cores (time-averaged over the window). Use to right-size CPU requests and limits.",
 		Query:       `rate(container_cpu_usage_seconds_total{container="$container"}[$duration])`,
 	}
 	ContainerAverageMemoryUsage = NamedQuery{
 		Name:        "average container memory usage (MiB)",
-		Description: "Average working-set memory of the container in MiB. Use to righ-size memory requests and limits.",
+		Description: "Average working-set memory of the container in MiB. Use to right-size memory requests and limits.",
 		Query:       `avg_over_time(container_memory_working_set_bytes{container="$container"}[$duration]) / (1024*1024)`,
 	}
 	// controller-runtime metrics based queries
