@@ -22,9 +22,9 @@ import (
 
 const numberOfTenants = 2
 
-// TestServiceProviderObservability demonstrates how to use the prometheus extension to benchmark a service provider (or domain service)
-func TestServiceProviderObservability(t *testing.T) {
-	observability := features.New("observability").
+// TestServiceProviderPerformance demonstrates how to use the prometheus extension to benchmark a service provider (or domain service)
+func TestServiceProviderPerformance(t *testing.T) {
+	observability := features.New("performance").
 		Setup(func(ctx context.Context, t *testing.T, c *envconf.Config) context.Context {
 			if _, err := clusterutils.ImportToPlatformCluster(ctx, c, "platform"); err != nil {
 				t.Fatalf("provider config import failed: %v", err)
