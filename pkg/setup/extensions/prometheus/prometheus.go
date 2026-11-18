@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -72,6 +73,19 @@ type TargetCluster struct {
 	Label string
 }
 
+func (tc TargetCluster) validate() error {
+	if tc.ControlPlane.Name == "" && tc.WorkloadClusterRequest.Name == "" {
+		return errors.New("missing control plane or workload cluster reference")
+	}
+	if tc.ControlPlane.Name != "" && tc.WorkloadClusterRequest.Name != "" {
+		return errors.New("control plane and workload cluster are mutually exclusive")
+	}
+	if tc.Label == "" {
+		return errors.New("an identifying (prometheus) label has to be provided")
+	}
+	return nil
+}
+
 // Prometheus defines global extension settings which are defaulted if not provided.
 type Prometheus struct {
 	// Namespace is the Kubernetes namespace where the Prometheus deployment and query jobs will be created.
@@ -116,18 +130,19 @@ func (p *Prometheus) Uninstall(ctx context.Context, cfg *envconf.Config) error {
 }
 
 func deleteIfTestingResource(ctx context.Context, obj k8s.Object, cfg *envconf.Config) error {
-	if err := cfg.Client().Resources().Get(ctx, obj.GetName(), "", obj); err == nil {
-		if value, ok := obj.GetLabels()[resources.CreatedByKey]; ok && value == resources.CreatedByValue {
-			klog.Infof("delete %T %q", obj, obj.GetName())
-			if err := cfg.Client().Resources().Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
-				return err
-			}
-			if err := wait.For(conditions.New(cfg.Client().Resources()).ResourceDeleted(obj)); err != nil {
-				return err
-			}
-		} else {
-			klog.Infof("skipped deletion of %T %q due to missing or unexpected %q annotation value", obj, obj.GetName(), resources.CreatedByKey)
+	if err := cfg.Client().Resources().Get(ctx, obj.GetName(), "", obj); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to retrieve %T %q for deletion: %w", obj, obj.GetName(), err)
+	}
+	if value, ok := obj.GetLabels()[resources.CreatedByKey]; ok && value == resources.CreatedByValue {
+		klog.Infof("delete %T %q", obj, obj.GetName())
+		if err := cfg.Client().Resources().Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+			return err
 		}
+		if err := wait.For(conditions.New(cfg.Client().Resources()).ResourceDeleted(obj)); err != nil {
+			return err
+		}
+	} else {
+		klog.Infof("skipped deletion of %T %q due to missing or unexpected %q annotation value", obj, obj.GetName(), resources.CreatedByKey)
 	}
 	return nil
 }
@@ -339,6 +354,9 @@ func (p *Prometheus) AddClusters(ctx context.Context, cfg *envconf.Config, targe
 	p.applyDefaults()
 	var additionalClusters []remoteCluster
 	for _, tc := range targetClusters {
+		if err := tc.validate(); err != nil {
+			return fmt.Errorf("invalid target cluster request: %w", err)
+		}
 		klog.Info("request access to scrape additional clusters")
 		// 1. lookup cluster request based on ControlPlane or WorkloadCluster key
 		crKey := tc.WorkloadClusterRequest

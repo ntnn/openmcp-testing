@@ -177,7 +177,7 @@ func Test_promtoolJob(t *testing.T) {
 			wantNamespace: "test-ns",
 			wantImage:     "prom/prometheus:custom",
 			wantCommand: []string{
-				"echo 'cpu'",
+				`printf '%s\n' "cpu"`,
 				"promtool query range",
 				defaultEndpoint,
 				`rate(cpu{container=\"test-container\"}[900s])`,
@@ -194,7 +194,7 @@ func Test_promtoolJob(t *testing.T) {
 			wantNamespace: "test-ns",
 			wantImage:     "prom/prometheus:custom",
 			wantCommand: []string{
-				"echo 'reconcile'",
+				`printf '%s\n' "reconcile"`,
 				"promtool query range",
 				defaultEndpoint,
 				`rate(reconcile{controller=\"test-controller\"}[900s])`,
