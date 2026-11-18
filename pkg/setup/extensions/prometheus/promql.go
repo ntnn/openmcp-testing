@@ -236,6 +236,8 @@ func (p Prometheus) promtoolJob(queries []NamedQuery, config QueryParameters) *b
 		pql := strings.ReplaceAll(q.Query, "$duration", config.Window.duration())
 		pql = strings.ReplaceAll(pql, "$container", config.Container)
 		pql = strings.ReplaceAll(pql, "$controller", config.Controller)
+		// escape any remaining $ so /bin/sh does not expand them as variables or command substitutions
+		pql = strings.ReplaceAll(pql, "$", `\$`)
 		fmt.Fprintf(&sb, "printf '%%s\\n' %q\n", q.Name)
 		fmt.Fprintf(&sb, "promtool query range %s %q -o json --step %s --start %d --end %d\n", defaultEndpoint, pql, config.Window.duration(), config.Window.Start.Unix(), config.Window.End.Unix())
 	}
